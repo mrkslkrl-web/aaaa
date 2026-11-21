@@ -1,0 +1,2 @@
+-keepattributes *Annotation*
+-keep class app.solco.music.data.model.** { *; }
