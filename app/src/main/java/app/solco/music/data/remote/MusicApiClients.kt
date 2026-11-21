@@ -380,6 +380,43 @@ class MusicApiClients(
         return name to img
     }
 
+    /**
+     * Fetches up to 50 Spotify tracks in a single API call to resolve "?" / stub tracks quickly.
+     */
+    suspend fun getSpotifyTracksBatch(cfg: SpotifyConfig, trackIds: List<String>): List<MatchedTrackResult> {
+        if (trackIds.isEmpty()) return emptyList()
+        val out = mutableListOf<MatchedTrackResult>()
+        for (chunk in trackIds.distinct().chunked(50)) {
+            val root = spotifyGet(cfg, "/tracks?market=IT&ids=${chunk.joinToString(",")}") ?: continue
+            val arr = root["tracks"]?.jsonArray ?: continue
+            for (el in arr) {
+                val obj = el as? JsonObject ?: continue
+                parseSpotifyTrackObj(obj)?.let { out.add(it) }
+            }
+        }
+        return out
+    }
+
+    /**
+     * Fetches up to 50 Spotify artists in a single API call to refresh profile images across the library.
+     */
+    suspend fun getSpotifyArtistsBatch(cfg: SpotifyConfig, artistIds: List<String>): Map<String, Pair<String, String?>> {
+        if (artistIds.isEmpty()) return emptyMap()
+        val out = LinkedHashMap<String, Pair<String, String?>>()
+        for (chunk in artistIds.distinct().chunked(50)) {
+            val root = spotifyGet(cfg, "/artists?ids=${chunk.joinToString(",")}") ?: continue
+            val arr = root["artists"]?.jsonArray ?: continue
+            for (el in arr) {
+                val obj = el as? JsonObject ?: continue
+                val id = obj["id"]?.jsonPrimitive?.contentOrNull ?: continue
+                val name = obj["name"]?.jsonPrimitive?.contentOrNull ?: continue
+                val img = pickBestSpotifyImage(obj["images"] as? JsonArray)
+                out[id] = name to img
+            }
+        }
+        return out
+    }
+
     private fun parseSpotifyTrackObj(obj: JsonObject): MatchedTrackResult? {
         val tid = obj["id"]?.jsonPrimitive?.contentOrNull ?: return null
         val title = obj["name"]?.jsonPrimitive?.contentOrNull ?: return null
@@ -546,7 +583,13 @@ class MusicApiClients(
         return FullAlbumResult("dz:$rawId", name, recordType, total, date, img, mainArt, tracks)
     }
 
-    suspend fun findDeezerArtistId(artistName: String): String? {
+    suspend fun findDeezerArtistId(artistName: String): String? =
+        findDeezerArtistProfile(artistName)?.first
+
+    /**
+     * Returns Pair(dzNumericId, highResPictureUrl) for the best matching Deezer artist.
+     */
+    suspend fun findDeezerArtistProfile(artistName: String): Pair<String, String?>? {
         val target = TextNormalizer.norm(artistName)
         if (target.isEmpty()) return null
         val root = deezerGet("/search/artist?limit=8&q=${enc(artistName)}") ?: return null
@@ -555,7 +598,44 @@ class MusicApiClients(
             TextNormalizer.norm(it["name"]?.jsonPrimitive?.contentOrNull) == target
         } ?: return null
         val id = hit["id"]?.jsonPrimitive?.longOrNull ?: return null
-        return id.toString()
+        val pic = hit["picture_xl"]?.jsonPrimitive?.contentOrNull
+            ?: hit["picture_big"]?.jsonPrimitive?.contentOrNull
+            ?: hit["picture_medium"]?.jsonPrimitive?.contentOrNull
+        return id.toString() to pic?.takeIf { it.isNotBlank() }
+    }
+
+    suspend fun getDeezerTrack(dzTrackId: String): MatchedTrackResult? {
+        val rawId = dzTrackId.removePrefix("dz:")
+        val o = deezerGet("/track/$rawId") ?: return null
+        val idNum = o["id"]?.jsonPrimitive?.longOrNull ?: return null
+        val title = o["title"]?.jsonPrimitive?.contentOrNull ?: return null
+        val artObj = o["artist"]?.jsonObject
+        val artId = artObj?.get("id")?.jsonPrimitive?.longOrNull?.let { "dz:$it" } ?: return null
+        val artName = artObj["name"]?.jsonPrimitive?.contentOrNull ?: return null
+        val alObj = o["album"]?.jsonObject
+        val alId = alObj?.get("id")?.jsonPrimitive?.longOrNull?.let { "dz:$it" }
+        val alTitle = alObj?.get("title")?.jsonPrimitive?.contentOrNull
+        val alImg = alObj?.get("cover_xl")?.jsonPrimitive?.contentOrNull
+            ?: alObj?.get("cover_big")?.jsonPrimitive?.contentOrNull
+            ?: alObj?.get("cover_medium")?.jsonPrimitive?.contentOrNull
+        val durMs = (o["duration"]?.jsonPrimitive?.longOrNull ?: 0L) * 1000L
+        return MatchedTrackResult(
+            trackId = "dz:$idNum",
+            title = title,
+            albumId = alId,
+            albumName = alTitle,
+            albumType = "album",
+            albumTotal = null,
+            albumDate = o["release_date"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+            albumImg = alImg,
+            albumArtists = listOf(artId to artName),
+            trackArtists = listOf(artId to artName),
+            durMs = durMs,
+            isrc = o["isrc"]?.jsonPrimitive?.contentOrNull,
+            disc = o["disk_number"]?.jsonPrimitive?.intOrNull ?: 1,
+            trackNum = o["track_position"]?.jsonPrimitive?.intOrNull ?: 0,
+            source = "dz"
+        )
     }
 
     suspend fun getDeezerArtistReleases(

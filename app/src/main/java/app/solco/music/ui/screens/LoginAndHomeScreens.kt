@@ -9,6 +9,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,9 +27,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.TrendingUp
 import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.ChevronRight
@@ -39,7 +42,6 @@ import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.NewReleases
 import androidx.compose.material.icons.rounded.PauseCircle
-import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.RateReview
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Settings
@@ -79,6 +81,7 @@ import app.solco.music.ui.SolcoViewModel
 import app.solco.music.ui.components.AmbientBackdrop
 import app.solco.music.ui.components.CoverArt
 import app.solco.music.ui.components.GlassCard
+import app.solco.music.ui.components.MonthlyBarChart
 import app.solco.music.ui.components.formatDurationShort
 import app.solco.music.ui.components.formatInt
 import app.solco.music.ui.components.formatRelativeSec
@@ -250,6 +253,15 @@ fun LoginScreen(vm: SolcoViewModel) {
     }
 }
 
+private data class RecentPlayRow(
+    val key: String,
+    val songId: String,
+    val title: String,
+    val artist: String,
+    val img: String?,
+    val ts: Long
+)
+
 @Composable
 fun HomeScreen(
     state: SolcoUiSnapshot,
@@ -265,61 +277,107 @@ fun HomeScreen(
     }
     val todayDate = MusicApiClients.todayDate()
     val todayReleasesCount = remember(state.releases) { state.releases.count { it.date == todayDate } }
-    val recentReleasesCount = remember(state.releases) { state.releases.size }
     val unresolvedCount = state.model.unresolved.size
+
+    // Recent plays (latest 12 real plays in reverse chronological order!)
+    val recentPlays = remember(state.model.plays, state.model.songs) {
+        val plays = state.model.plays
+        val out = ArrayList<RecentPlayRow>(12)
+        for (i in plays.lastIndex downTo 0) {
+            if (out.size >= 12) break
+            val p = plays[i]
+            val sid = state.model.songOf[p.trackId] ?: p.trackId
+            val song = state.model.songs[sid] ?: continue
+            val artistStr = song.artists.joinToString(", ") { it.second }.ifBlank { "Artista" }
+            out.add(
+                RecentPlayRow(
+                    key = "${p.ts}_${p.trackId}_$i",
+                    songId = sid,
+                    title = song.title,
+                    artist = artistStr,
+                    img = song.img,
+                    ts = p.ts
+                )
+            )
+        }
+        out
+    }
+
+    // 12-month global activity chart
+    val monthlyAll = remember(state.model.plays) {
+        ModelEngine.monthlyTotalActivity(state.model, 12)
+    }
+
+    // 30-day highlights (#1 Artist & #1 Album of the month)
+    val monthStats = remember(state.model) { vm.statsForPeriod("d30") }
+    val topMonthArtist = remember(monthStats, state.model.artists) {
+        monthStats.artist.entries.maxByOrNull { it.value.plays }?.let { (id, st) ->
+            state.model.artists[id]?.let { it to st }
+        }
+    }
+    val topMonthAlbum = remember(monthStats, state.model.albums) {
+        monthStats.album.entries
+            .filter { state.model.albums[it.key]?.let { a -> a.aliasOf == null && a.total >= ModelEngine.ALBUM_MIN_TRACKS } == true }
+            .maxByOrNull { it.value.totalPlays }?.let { (id, st) ->
+                state.model.albums[id]?.let { it to st }
+            }
+    }
+
+    var showAllRecent by remember { mutableStateOf(false) }
 
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
             .statusBarsPadding(),
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 104.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+        contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 96.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // Header
+        // Compact vibrant header
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Column {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Box(
-                            modifier = Modifier
-                                .size(34.dp)
-                                .clip(CircleShape)
-                                .background(SolcoColors.PrimaryGradient),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(Icons.Rounded.Album, contentDescription = null, tint = Color.White, modifier = Modifier.size(22.dp))
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Box(
+                        modifier = Modifier
+                            .size(38.dp)
+                            .clip(CircleShape)
+                            .background(SolcoColors.PrimaryGradient),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(Icons.Rounded.Album, contentDescription = null, tint = Color.White, modifier = Modifier.size(24.dp))
+                    }
+                    Column {
+                        Text("Solco", style = MaterialTheme.typography.headlineMedium)
+                        val subText = when {
+                            state.syncing -> "Sincronizzo ascolti…"
+                            state.matching -> "Collego brani (${state.matchProgress})…"
+                            state.refreshingPhotos -> "Aggiorno foto artisti (${state.photoProgress})…"
+                            state.lastSyncMs > 0L -> "Aggiornato ${formatRelativeSec(state.lastSyncMs / 1000L)}"
+                            state.error != null -> state.error
+                            else -> "${formatInt(state.statsAll.totalPlays)} ascolti totali"
                         }
-                        Text("Solco", style = MaterialTheme.typography.headlineLarge)
+                        Text(
+                            text = subText,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (state.error != null && !state.syncing) SolcoColors.AccentCoral else SolcoColors.AccentCyan
+                        )
                     }
-                    val subText = when {
-                        state.syncing -> "Sincronizzo ascolti e dati…"
-                        state.matching -> "Collego brani (${state.matchProgress})…"
-                        state.lastSyncMs > 0L -> "Aggiornato ${formatRelativeSec(state.lastSyncMs / 1000L)}"
-                        state.error != null -> state.error
-                        else -> "I tuoi ascolti e recensioni"
-                    }
-                    Text(
-                        text = subText,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = if (state.error != null && !state.syncing) SolcoColors.AccentCoral else SolcoColors.TextSecondary
-                    )
                 }
 
                 IconButton(
                     onClick = { vm.syncNow() },
                     enabled = !state.syncing,
                     modifier = Modifier
-                        .size(44.dp)
+                        .size(42.dp)
                         .clip(CircleShape)
                         .background(SolcoColors.CardElevated)
                         .border(1.dp, SolcoColors.BorderGlow, CircleShape)
                 ) {
-                    if (state.syncing || state.matching) {
-                        CircularProgressIndicator(modifier = Modifier.size(20.dp), color = SolcoColors.AccentCyan, strokeWidth = 2.dp)
+                    if (state.syncing || state.matching || state.refreshingPhotos) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), color = SolcoColors.AccentCyan, strokeWidth = 2.dp)
                     } else {
                         Icon(Icons.Rounded.Refresh, contentDescription = "Aggiorna", tint = SolcoColors.AccentCyan)
                     }
@@ -327,28 +385,63 @@ fun HomeScreen(
             }
         }
 
-        // Now Playing banner (if active on Last.fm)
+        // Now Playing banner
         state.nowPlaying?.let { np ->
             if (np.track.isNotBlank()) {
                 item {
                     GlassCard(
                         glowBorder = true,
                         accentColor = SolcoColors.AccentMint,
-                        contentPadding = PaddingValues(14.dp)
+                        contentPadding = PaddingValues(12.dp)
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            CoverArt(url = np.img, name = np.track, size = 50.dp)
+                            CoverArt(url = np.img, name = np.track, size = 54.dp, glow = true)
                             Column(modifier = Modifier.weight(1f)) {
-                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                                     Icon(Icons.Rounded.Equalizer, contentDescription = null, tint = SolcoColors.AccentMint, modifier = Modifier.size(14.dp))
-                                    Text("IN ASCOLTO ORA", color = SolcoColors.AccentMint, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold)
+                                    Text("IN ASCOLTO ORA", color = SolcoColors.AccentMint, fontSize = 10.sp, fontWeight = FontWeight.ExtraBold)
                                 }
-                                Text(np.track, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(np.track, fontWeight = FontWeight.Bold, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 Text(np.artist, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Hero Stats Banner + Goals in one dense, rich dashboard block
+        item {
+            val st = state.statsAll
+            GlassCard(
+                glowBorder = true,
+                accentColor = SolcoColors.AccentViolet,
+                contentPadding = PaddingValues(14.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text("ASCOLTI TOTALI", style = MaterialTheme.typography.labelSmall, color = SolcoColors.AccentCyan, fontWeight = FontWeight.ExtraBold)
+                        Text(formatInt(st.totalPlays), fontSize = 30.sp, fontWeight = FontWeight.ExtraBold, color = SolcoColors.TextPrimary)
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text(formatDurationShort(st.totalMs), fontWeight = FontWeight.ExtraBold, fontSize = 16.sp, color = SolcoColors.AccentViolet)
+                            Text("ascoltati", style = MaterialTheme.typography.labelSmall)
+                        }
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text(formatInt(st.artist.size), fontWeight = FontWeight.ExtraBold, fontSize = 16.sp, color = SolcoColors.AccentPink)
+                            Text("artisti", style = MaterialTheme.typography.labelSmall)
+                        }
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text(formatInt(activeReviews.size), fontWeight = FontWeight.ExtraBold, fontSize = 16.sp, color = SolcoColors.AccentMint)
+                            Text("recensioni", style = MaterialTheme.typography.labelSmall)
                         }
                     }
                 }
@@ -359,11 +452,11 @@ fun HomeScreen(
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 GoalTileCard(
                     modifier = Modifier.weight(1f),
-                    title = "Album",
+                    title = "Obiettivo Album",
                     icon = Icons.Rounded.Album,
                     accent = SolcoColors.AccentViolet,
                     balance = albumGoal.balance,
@@ -373,7 +466,7 @@ fun HomeScreen(
                 )
                 GoalTileCard(
                     modifier = Modifier.weight(1f),
-                    title = "Singoli",
+                    title = "Obiettivo Singoli",
                     icon = Icons.Rounded.MusicNote,
                     accent = SolcoColors.AccentPink,
                     balance = singleGoal.balance,
@@ -384,43 +477,7 @@ fun HomeScreen(
             }
         }
 
-        // Releases highlight banner
-        item {
-            GlassCard(
-                glowBorder = true,
-                accentColor = SolcoColors.AccentCyan,
-                onClick = { onNavigate("releases") }
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(14.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(48.dp)
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(SolcoColors.CyanVioletGradient),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(Icons.Rounded.NewReleases, contentDescription = null, tint = Color.White, modifier = Modifier.size(26.dp))
-                    }
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("Nuove uscite", style = MaterialTheme.typography.titleLarge)
-                        val msg = when {
-                            state.releaseScan.scanning -> "Scansione: ${state.releaseScan.phase}"
-                            todayReleasesCount > 0 -> "$todayReleasesCount uscite oggi · $recentReleasesCount negli ultimi 7 giorni"
-                            recentReleasesCount > 0 -> "$recentReleasesCount uscite recenti dai tuoi artisti"
-                            else -> "Controlla tutti i tuoi artisti (Spotify + Deezer)"
-                        }
-                        Text(msg, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    }
-                    Icon(Icons.Rounded.ChevronRight, contentDescription = null, tint = SolcoColors.AccentCyan)
-                }
-            }
-        }
-
-        // Action notices
+        // Notices if needed
         if (state.lastFmConfig.user.isBlank() || state.lastFmConfig.key.isBlank()) {
             item {
                 ActionNoticeBanner(
@@ -431,131 +488,197 @@ fun HomeScreen(
                 )
             }
         }
-
         if (unresolvedCount > 0) {
             item {
                 ActionNoticeBanner(
                     icon = Icons.Rounded.Link,
-                    text = "${formatInt(unresolvedCount)} brani da collegare (tocca per collegarli)",
+                    text = "${formatInt(unresolvedCount)} brani da collegare (tocca per risolverli)",
                     tint = SolcoColors.AccentCoral,
                     onClick = { onNavigate("pending") }
                 )
             }
         }
 
-        // Overview statistics grid
-        item {
-            Text("Riepilogo ascolti", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 4.dp))
+        // ========== ASCOLTATI DI RECENTE (BACK IN HOME!) ==========
+        if (recentPlays.isNotEmpty()) {
+            item {
+                GlassCard(contentPadding = PaddingValues(12.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                            Icon(Icons.Rounded.History, contentDescription = null, tint = SolcoColors.AccentCyan, modifier = Modifier.size(19.dp))
+                            Text("Ascoltati di recente", style = MaterialTheme.typography.titleLarge)
+                        }
+                        if (recentPlays.size > 5) {
+                            TextButton(
+                                onClick = { showAllRecent = !showAllRecent },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                            ) {
+                                Text(if (showAllRecent) "Meno" else "Mostra ${recentPlays.size}", color = SolcoColors.AccentCyan, fontSize = 12.sp)
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    val shown = if (showAllRecent) recentPlays else recentPlays.take(5)
+                    shown.forEach { rp ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable { onNavigate("track/${rp.songId}") }
+                                .padding(vertical = 6.dp, horizontal = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            CoverArt(url = rp.img, name = rp.title, size = 44.dp)
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(rp.title, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(rp.artist, style = MaterialTheme.typography.labelSmall, color = SolcoColors.TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                            Text(
+                                text = formatRelativeSec(rp.ts),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = SolcoColors.TextMuted
+                            )
+                        }
+                    }
+                }
+            }
         }
 
+        // Highlights ultimi 30 giorni (#1 Artista & #1 Album del mese)
+        if (topMonthArtist != null || topMonthAlbum != null) {
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    topMonthArtist?.let { (art, st) ->
+                        GlassCard(
+                            modifier = Modifier.weight(1f),
+                            glowBorder = true,
+                            accentColor = SolcoColors.AccentGold,
+                            onClick = { onNavigate("artist/${art.id}") },
+                            contentPadding = PaddingValues(12.dp)
+                        ) {
+                            Text("TOP ARTISTA · 30G", fontSize = 10.sp, fontWeight = FontWeight.ExtraBold, color = SolcoColors.AccentGold)
+                            Spacer(Modifier.height(8.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                CoverArt(url = art.img, name = art.name, size = 48.dp, round = true)
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(art.name, fontWeight = FontWeight.Bold, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text("${formatInt(st.plays)} ascolti", fontSize = 12.sp, fontWeight = FontWeight.ExtraBold, color = SolcoColors.AccentCyan)
+                                }
+                            }
+                        }
+                    }
+                    topMonthAlbum?.let { (al, st) ->
+                        GlassCard(
+                            modifier = Modifier.weight(1f),
+                            glowBorder = true,
+                            accentColor = SolcoColors.AccentPink,
+                            onClick = { onNavigate("album/${al.id}") },
+                            contentPadding = PaddingValues(12.dp)
+                        ) {
+                            Text("TOP ALBUM · 30G", fontSize = 10.sp, fontWeight = FontWeight.ExtraBold, color = SolcoColors.AccentPink)
+                            Spacer(Modifier.height(8.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                CoverArt(url = al.img, name = al.name, size = 48.dp)
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(al.name, fontWeight = FontWeight.Bold, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text("${formatInt(st.totalPlays)} ascolti", fontSize = 12.sp, fontWeight = FontWeight.ExtraBold, color = SolcoColors.AccentViolet)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Nuove uscite strip (with horizontal cover art preview!)
         item {
-            val st = state.statsAll
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                StatMiniCard(
-                    modifier = Modifier.weight(1f),
-                    label = "Ascolti",
-                    value = formatInt(st.totalPlays),
-                    sub = formatDurationShort(st.totalMs),
-                    accent = SolcoColors.AccentCyan
-                )
-                StatMiniCard(
-                    modifier = Modifier.weight(1f),
-                    label = "Artisti",
-                    value = formatInt(st.artist.size),
-                    sub = "unificati",
-                    accent = SolcoColors.AccentViolet
-                )
-                StatMiniCard(
-                    modifier = Modifier.weight(1f),
-                    label = "Recensioni",
-                    value = formatInt(activeReviews.size),
-                    sub = "${formatInt(st.album.size)} album",
-                    accent = SolcoColors.AccentPink
-                )
+            GlassCard(
+                glowBorder = true,
+                accentColor = SolcoColors.AccentCyan,
+                onClick = { onNavigate("releases") },
+                contentPadding = PaddingValues(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Icon(Icons.Rounded.NewReleases, contentDescription = null, tint = SolcoColors.AccentCyan, modifier = Modifier.size(20.dp))
+                        Column {
+                            Text("Nuove uscite", style = MaterialTheme.typography.titleMedium)
+                            val msg = when {
+                                state.releaseScan.scanning -> "Scansione: ${state.releaseScan.phase}"
+                                todayReleasesCount > 0 -> "$todayReleasesCount oggi · ${state.releases.size} negli ultimi 7g"
+                                state.releases.isNotEmpty() -> "${state.releases.size} uscite recenti dai tuoi artisti"
+                                else -> "Tocca per scansionare tutti i tuoi artisti"
+                            }
+                            Text(msg, style = MaterialTheme.typography.labelSmall, color = SolcoColors.TextSecondary)
+                        }
+                    }
+                    Icon(Icons.Rounded.ChevronRight, contentDescription = null, tint = SolcoColors.AccentCyan)
+                }
+                if (state.releases.isNotEmpty()) {
+                    Spacer(Modifier.height(10.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        state.releases.take(8).forEach { rel ->
+                            Column(
+                                modifier = Modifier
+                                    .width(74.dp)
+                                    .clickable {
+                                        vm.openReleaseAlbum(rel) { alId -> onNavigate("album/$alId") }
+                                    },
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                CoverArt(url = rel.img, name = rel.title, size = 70.dp)
+                                Spacer(Modifier.height(4.dp))
+                                Text(rel.title, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(rel.artists.firstOrNull().orEmpty(), fontSize = 10.sp, color = SolcoColors.TextMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 12-month global activity chart
+        if (monthlyAll.any { it.plays > 0 }) {
+            item {
+                GlassCard(contentPadding = PaddingValues(14.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Icon(Icons.AutoMirrored.Rounded.TrendingUp, contentDescription = null, tint = SolcoColors.AccentViolet, modifier = Modifier.size(18.dp))
+                            Text("Andamento ultimi 12 mesi", style = MaterialTheme.typography.titleMedium)
+                        }
+                        Text("${formatInt(monthlyAll.sumOf { it.plays })} ascolti", style = MaterialTheme.typography.labelSmall, color = SolcoColors.AccentCyan)
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    MonthlyBarChart(buckets = monthlyAll)
+                }
             }
         }
 
         // Quick shortcuts
         item {
-            Text("Accesso rapido", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 4.dp))
-        }
-
-        item {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                ShortcutPill(
-                    modifier = Modifier.weight(1f),
-                    icon = Icons.Rounded.RateReview,
-                    label = "Recensioni",
-                    accent = SolcoColors.AccentViolet,
-                    onClick = { onNavigate("reviews") }
-                )
-                ShortcutPill(
-                    modifier = Modifier.weight(1f),
-                    icon = Icons.Rounded.EmojiEvents,
-                    label = "Top",
-                    accent = SolcoColors.AccentGold,
-                    onClick = { onNavigate("top") }
-                )
-                ShortcutPill(
-                    modifier = Modifier.weight(1f),
-                    icon = Icons.Rounded.SportsKabaddi,
-                    label = "UwuFufu",
-                    accent = SolcoColors.AccentPink,
-                    onClick = { onNavigate("uwu") }
-                )
-            }
-        }
-
-        // Top 5 Artists Preview
-        val topArtists = state.statsAll.artist.entries
-            .sortedByDescending { it.value.plays }
-            .take(5)
-            .mapNotNull { (aid, st) -> state.model.artists[aid]?.let { it to st } }
-
-        if (topArtists.isNotEmpty()) {
-            item {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("Artisti più ascoltati", style = MaterialTheme.typography.titleLarge)
-                    TextButton(onClick = { onNavigate("artists") }) {
-                        Text("Tutti", color = SolcoColors.AccentCyan)
-                    }
-                }
-            }
-
-            item {
-                GlassCard(contentPadding = PaddingValues(10.dp)) {
-                    topArtists.forEachIndexed { idx, (art, st) ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .clickable { onNavigate("artist/${art.id}") }
-                                .padding(horizontal = 6.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            Text(
-                                text = "#${idx + 1}",
-                                fontWeight = FontWeight.ExtraBold,
-                                color = if (idx == 0) SolcoColors.AccentGold else SolcoColors.TextMuted,
-                                modifier = Modifier.width(26.dp)
-                            )
-                            CoverArt(url = art.img, name = art.name, size = 44.dp, round = true)
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(art.name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text(
-                                    "${formatInt(st.plays)} ascolti · ${formatInt(st.songs)} brani",
-                                    style = MaterialTheme.typography.bodyMedium
-                                )
-                            }
-                            Icon(Icons.Rounded.ChevronRight, contentDescription = null, tint = SolcoColors.TextMuted)
-                        }
-                    }
-                }
+                ShortcutPill(Modifier.weight(1f), Icons.Rounded.RateReview, "Recensioni", SolcoColors.AccentViolet) { onNavigate("reviews") }
+                ShortcutPill(Modifier.weight(1f), Icons.Rounded.EmojiEvents, "Top", SolcoColors.AccentGold) { onNavigate("top") }
+                ShortcutPill(Modifier.weight(1f), Icons.Rounded.SportsKabaddi, "UwuFufu", SolcoColors.AccentPink) { onNavigate("uwu") }
             }
         }
     }
@@ -582,23 +705,29 @@ private fun GoalTileCard(
         glowBorder = true,
         accentColor = accent,
         onClick = onClick,
-        contentPadding = PaddingValues(14.dp)
+        contentPadding = PaddingValues(12.dp)
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(18.dp))
-            Text(title, style = MaterialTheme.typography.titleMedium)
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(16.dp))
+            Text(title, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (paused) {
-                Icon(Icons.Rounded.PauseCircle, contentDescription = "In pausa", tint = SolcoColors.AccentAmber, modifier = Modifier.size(16.dp))
+                Icon(Icons.Rounded.PauseCircle, contentDescription = "In pausa", tint = SolcoColors.AccentAmber, modifier = Modifier.size(14.dp))
             }
         }
-        Spacer(Modifier.height(8.dp))
-        val sign = if (balance > 0) "+$balance" else balance.toString()
-        Text(sign, fontSize = 28.sp, fontWeight = FontWeight.ExtraBold, color = balColor)
-        Text(
-            text = if (todayCount > 0) "Oggi: $todayCount" else "Ancora 0 oggi",
-            style = MaterialTheme.typography.labelSmall,
-            color = SolcoColors.TextSecondary
-        )
+        Spacer(Modifier.height(6.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.Bottom,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            val sign = if (balance > 0) "+$balance" else balance.toString()
+            Text(sign, fontSize = 26.sp, fontWeight = FontWeight.ExtraBold, color = balColor)
+            Text(
+                text = if (todayCount > 0) "Oggi: $todayCount" else "0 oggi",
+                style = MaterialTheme.typography.labelSmall,
+                color = SolcoColors.TextSecondary
+            )
+        }
     }
 }
 
@@ -613,33 +742,17 @@ private fun ActionNoticeBanner(
         glowBorder = true,
         accentColor = tint,
         onClick = onClick,
-        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp)
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp)
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp))
+            Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
             Text(text, modifier = Modifier.weight(1f), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
             Icon(Icons.Rounded.ChevronRight, contentDescription = null, tint = tint)
         }
-    }
-}
-
-@Composable
-private fun StatMiniCard(
-    modifier: Modifier,
-    label: String,
-    value: String,
-    sub: String,
-    accent: Color
-) {
-    GlassCard(modifier = modifier, contentPadding = PaddingValues(12.dp)) {
-        Text(label, style = MaterialTheme.typography.labelSmall, color = accent, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(4.dp))
-        Text(value, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1)
-        Text(sub, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -654,14 +767,14 @@ private fun ShortcutPill(
     GlassCard(
         modifier = modifier,
         onClick = onClick,
-        contentPadding = PaddingValues(vertical = 14.dp, horizontal = 8.dp)
+        contentPadding = PaddingValues(vertical = 12.dp, horizontal = 8.dp)
     ) {
         Column(
             modifier = Modifier.fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+            verticalArrangement = Arrangement.spacedBy(5.dp)
         ) {
-            Icon(icon, contentDescription = label, tint = accent, modifier = Modifier.size(24.dp))
+            Icon(icon, contentDescription = label, tint = accent, modifier = Modifier.size(22.dp))
             Text(label, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
         }
     }
@@ -688,7 +801,7 @@ fun MoreScreen(
         MoreMenuItem("uwu", "UwuFufu", "Tornei a eliminazione", Icons.Rounded.SportsKabaddi, SolcoColors.AccentPink),
         MoreMenuItem("pending", "Da collegare", "Abbina brani", Icons.Rounded.Link, SolcoColors.AccentCoral, state.model.unresolved.size),
         MoreMenuItem("import", "Importa storico", "JSON / ZIP Spotify", Icons.Rounded.UploadFile, SolcoColors.AccentMint),
-        MoreMenuItem("settings", "Impostazioni", "Last.fm, Spotify, Obiettivi", Icons.Rounded.Settings, SolcoColors.AccentAmber)
+        MoreMenuItem("settings", "Impostazioni", "Last.fm, Spotify, Foto", Icons.Rounded.Settings, SolcoColors.AccentAmber)
     )
 
     Column(

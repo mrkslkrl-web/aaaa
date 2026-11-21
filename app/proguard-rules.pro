@@ -1,2 +1,7 @@
--keepattributes *Annotation*
+-keepattributes *Annotation*, Signature, InnerClasses, EnclosingMethod
 -keep class app.solco.music.data.model.** { *; }
+-keep class app.solco.music.data.local.** { *; }
+-keep class kotlinx.serialization.** { *; }
+-dontwarn okhttp3.**
+-dontwarn okio.**
+-dontwarn javax.annotation.**

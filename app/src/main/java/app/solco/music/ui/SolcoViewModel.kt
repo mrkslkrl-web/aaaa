@@ -83,6 +83,22 @@ class SolcoViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun refreshArtistImagesNow() {
+        viewModelScope.launch {
+            showToast("Aggiorno le foto profilo degli artisti…")
+            repo.refreshArtistImages(force = true)
+            showToast("Foto profilo artisti aggiornate!")
+        }
+    }
+
+    fun resolveUnknownTracksNow() {
+        viewModelScope.launch {
+            showToast("Risolvo brani e artisti senza nome…")
+            repo.resolveStubTracksAndArtists()
+            showToast("Catalogo aggiornato!")
+        }
+    }
+
     fun scanReleases(force: Boolean = true) {
         viewModelScope.launch {
             repo.scanReleases(force = force)

@@ -184,4 +184,28 @@ class SolcoCoreEnginesTest {
         assertEquals(1, prog.todayCount)
         assertEquals(-2, prog.balance)
     }
+
+    @Test
+    fun stubTrackFallback_usesNameRecordAndNeverCreatesQuestionMarkArtist() {
+        val raw = RawStoreSnapshot(
+            tracks = mapOf(
+                "stub1" to TrackRecord("stub1", "?", null, 0L, null, "[]", null, "stub"),
+                "orphan1" to TrackRecord("orphan1", "?", null, 0L, null, """[[null,"?"]]""", null, "stub")
+            ),
+            names = mapOf(
+                "n1" to NameRecord("n1", "k1", "Måneskin", "Zitti e buoni", "Teatro d'ira", "stub1", "ok")
+            ),
+            chunks = mapOf(
+                "sp:2026-01" to ChunkRecord("sp:2026-01", "sp", """[[1700002000,180000,"orphan1"]]""", 1),
+                "lfm:2026-01" to ChunkRecord("lfm:2026-01", "lfm", """[[1700003000,"n1"]]""", 1)
+            )
+        )
+        val model = ModelEngine.buildModel(raw)
+        val stats = ModelEngine.computeStats(model, "all")
+
+        assertEquals("Zitti e buoni", model.tracks["stub1"]?.name)
+        assertTrue(stats.artist.keys.none { model.artists[it]?.name == "?" || it == "n:" })
+        assertEquals(1, stats.artist.size)
+        assertEquals("Måneskin", model.artists[stats.artist.keys.first()]?.name)
+    }
 }

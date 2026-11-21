@@ -19,12 +19,14 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Album
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Edit
@@ -34,6 +36,7 @@ import androidx.compose.material.icons.rounded.RateReview
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
@@ -52,8 +55,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -85,7 +90,7 @@ private data class LibraryRowItem(
     val img: String?,
     val round: Boolean,
     val plays: Int,
-    val secondaryStat: String,
+    val extraBadge: String?,
     val lastTs: Long,
     val sortScore: Double,
     val displayScore: Double?,
@@ -102,6 +107,12 @@ fun LibraryScreen(
     var period by remember(kind) { mutableStateOf("all") }
     var sortBy by remember(kind) { mutableStateOf("plays") }
     var query by remember(kind) { mutableStateOf("") }
+    val listState = rememberLazyListState()
+
+    // ALWAYS scroll back to #1 when switching tab, period, sort, or search query!
+    LaunchedEffect(kind, period, sortBy, query) {
+        listState.scrollToItem(0)
+    }
 
     val stats = remember(state.model, period) { vm.statsForPeriod(period) }
     val showCalc = state.showCalculatedAlbumScore
@@ -116,6 +127,7 @@ fun LibraryScreen(
         val list: List<LibraryRowItem> = when (kind) {
             "artist" -> stats.artist.entries.mapNotNull { (aid, st) ->
                 val art = model.artists[aid] ?: return@mapNotNull null
+                if (art.name.isBlank() || art.name == "?" || art.name == "…") return@mapNotNull null
                 if (qNorm.isNotEmpty() && !TextNormalizer.norm(art.name).contains(qNorm)) return@mapNotNull null
                 val rev = findReview("artist", aid)
                 val (ds, dm) = rev?.let { RatingEngine.displayScore(it, showCalc) } ?: (null to null)
@@ -126,7 +138,7 @@ fun LibraryScreen(
                     img = art.img,
                     round = true,
                     plays = st.plays,
-                    secondaryStat = "${formatInt(st.plays)} ascolti",
+                    extraBadge = null,
                     lastTs = st.lastTs,
                     sortScore = rev?.let { RatingEngine.sortScore(it) } ?: -1.0,
                     displayScore = ds,
@@ -136,7 +148,7 @@ fun LibraryScreen(
             "album" -> stats.album.entries.mapNotNull { (alId, st) ->
                 val al = model.albums[alId] ?: return@mapNotNull null
                 if (al.aliasOf != null || al.total < ModelEngine.ALBUM_MIN_TRACKS) return@mapNotNull null
-                val artistLabel = al.artists.joinToString(", ") { it.second }.ifBlank { "Artista sconosciuto" }
+                val artistLabel = al.artists.joinToString(", ") { it.second }.ifBlank { "Artista" }
                 if (qNorm.isNotEmpty() &&
                     !TextNormalizer.norm(al.name).contains(qNorm) &&
                     !TextNormalizer.norm(artistLabel).contains(qNorm)
@@ -150,7 +162,7 @@ fun LibraryScreen(
                     img = al.img,
                     round = false,
                     plays = st.totalPlays,
-                    secondaryStat = "${formatInt(st.fullPlays)}x completo · ${formatInt(st.totalPlays)}",
+                    extraBadge = if (st.fullPlays > 0) "${st.fullPlays}x completo" else null,
                     lastTs = st.lastTs,
                     sortScore = rev?.let { RatingEngine.sortScore(it) } ?: -1.0,
                     displayScore = ds,
@@ -159,6 +171,7 @@ fun LibraryScreen(
             }
             else -> stats.song.entries.mapNotNull { (sid, st) ->
                 val s = model.songs[sid] ?: return@mapNotNull null
+                if (s.title == "?" || s.title == "…") return@mapNotNull null
                 val artistLabel = s.artists.joinToString(", ") { it.second }
                 if (qNorm.isNotEmpty() &&
                     !TextNormalizer.norm(s.title).contains(qNorm) &&
@@ -173,7 +186,7 @@ fun LibraryScreen(
                     img = s.img,
                     round = false,
                     plays = st.plays,
-                    secondaryStat = "${formatInt(st.plays)} ascolti",
+                    extraBadge = if (s.dur > 0) formatTrackMs(s.dur) else null,
                     lastTs = st.lastTs,
                     sortScore = rev?.let { RatingEngine.sortScore(it) } ?: -1.0,
                     displayScore = ds,
@@ -190,6 +203,11 @@ fun LibraryScreen(
         }
     }
 
+    val maxPlays = remember(rows) { (rows.maxOfOrNull { it.plays } ?: 1).coerceAtLeast(1) }
+    val showArtistPodium = kind == "artist" && sortBy == "plays" && query.isBlank() && rows.size >= 3
+    val listRows = if (showArtistPodium) rows.drop(3) else rows
+    val rankOffset = if (showArtistPodium) 3 else 0
+
     val title = when (kind) {
         "artist" -> "Artisti"
         "album" -> "Album"
@@ -201,25 +219,48 @@ fun LibraryScreen(
             .fillMaxSize()
             .statusBarsPadding()
     ) {
+        // Header with prominent total plays summary + Refresh artist photos action
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.Bottom,
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Column {
-                Text(title, style = MaterialTheme.typography.headlineLarge)
-                Text("${formatInt(rows.size)} elementi", style = MaterialTheme.typography.bodyMedium)
+                Text(title, style = MaterialTheme.typography.headlineMedium)
+                Text(
+                    "${formatInt(rows.size)} elementi · ${formatInt(stats.totalPlays)} ascolti · ${formatDurationShort(stats.totalMs)}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = SolcoColors.AccentCyan
+                )
+            }
+            if (kind == "artist") {
+                OutlinedButton(
+                    onClick = { vm.refreshArtistImagesNow() },
+                    enabled = !state.refreshingPhotos,
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    if (state.refreshingPhotos) {
+                        CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp, color = SolcoColors.AccentCyan)
+                        Spacer(Modifier.width(6.dp))
+                        Text(state.photoProgress, fontSize = 11.sp)
+                    } else {
+                        Icon(Icons.Rounded.AutoAwesome, contentDescription = null, modifier = Modifier.size(15.dp), tint = SolcoColors.AccentCyan)
+                        Spacer(Modifier.width(5.dp))
+                        Text("Aggiorna foto", fontSize = 11.sp, color = SolcoColors.AccentCyan)
+                    }
+                }
             }
         }
 
-        // Search input
+        // Compact Search bar
         OutlinedTextField(
             value = query,
             onValueChange = { query = it },
-            placeholder = { Text("Cerca $title…") },
-            leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null, tint = SolcoColors.AccentViolet) },
+            placeholder = { Text("Cerca $title…", fontSize = 14.sp) },
+            leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null, tint = SolcoColors.AccentViolet, modifier = Modifier.size(20.dp)) },
             trailingIcon = {
                 if (query.isNotEmpty()) {
                     IconButton(onClick = { query = "" }) {
@@ -228,7 +269,7 @@ fun LibraryScreen(
                 }
             },
             singleLine = true,
-            shape = RoundedCornerShape(16.dp),
+            shape = RoundedCornerShape(14.dp),
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp),
@@ -240,14 +281,14 @@ fun LibraryScreen(
             )
         )
 
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(6.dp))
         PeriodChipRow(selectedPeriod = period, years = state.model.years, onSelect = { period = it })
 
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 6.dp),
+                .padding(horizontal = 16.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             listOf("plays" to "Più ascoltati", "rating" to "Voto", "recent" to "Recenti", "alpha" to "A–Z").forEach { (k, lbl) ->
@@ -257,7 +298,7 @@ fun LibraryScreen(
                     onClick = { sortBy = k },
                     label = { Text(lbl, fontSize = 12.sp) },
                     colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = SolcoColors.AccentPink.copy(alpha = 0.22f),
+                        selectedContainerColor = SolcoColors.AccentPink.copy(alpha = 0.24f),
                         selectedLabelColor = SolcoColors.TextPrimary
                     )
                 )
@@ -276,13 +317,37 @@ fun LibraryScreen(
             )
         } else {
             LazyColumn(
+                state = listState,
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 104.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 4.dp, bottom = 98.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                itemsIndexed(rows, key = { _, item -> item.id }) { idx, item ->
+                // Top-3 Artist Podium Hero!
+                if (showArtistPodium) {
+                    item(key = "artist_podium") {
+                        ArtistPodiumHero(
+                            first = rows[0],
+                            second = rows[1],
+                            third = rows[2],
+                            onClick = { onNavigate("artist/$it") }
+                        )
+                    }
+                }
+
+                itemsIndexed(listRows, key = { _, item -> item.id }) { idx, item ->
+                    val rank = idx + 1 + rankOffset
+                    val ratio = (item.plays.toFloat() / maxPlays.toFloat()).coerceIn(0.04f, 1f)
+                    val artSize = if (kind == "artist") 70.dp else 60.dp
+
                     GlassCard(
                         onClick = { onNavigate("$kind/${item.id}") },
+                        glowBorder = rank <= 3,
+                        accentColor = when (rank) {
+                            1 -> SolcoColors.AccentGold
+                            2 -> Color(0xFFD0D9E6)
+                            3 -> Color(0xFFE09F67)
+                            else -> SolcoColors.AccentViolet
+                        },
                         contentPadding = PaddingValues(12.dp)
                     ) {
                         Row(
@@ -290,26 +355,195 @@ fun LibraryScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            Text(
-                                text = "${idx + 1}",
-                                color = if (idx < 3) SolcoColors.AccentGold else SolcoColors.TextMuted,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 12.sp,
-                                modifier = Modifier.width(26.dp)
-                            )
-                            CoverArt(url = item.img, name = item.title, size = 50.dp, round = item.round)
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(item.title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text(item.subtitle, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text(item.secondaryStat, style = MaterialTheme.typography.labelSmall, color = SolcoColors.AccentCyan)
+                            // Rank pill
+                            Box(
+                                modifier = Modifier
+                                    .width(28.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "#$rank",
+                                    color = when (rank) {
+                                        1 -> SolcoColors.AccentGold
+                                        2 -> Color(0xFFD0D9E6)
+                                        3 -> Color(0xFFE09F67)
+                                        else -> SolcoColors.TextMuted
+                                    },
+                                    fontWeight = FontWeight.ExtraBold,
+                                    fontSize = if (rank <= 3) 14.sp else 12.sp
+                                )
                             }
-                            if (item.displayScore != null || item.displayMood != null) {
-                                ScoreBadge(score = item.displayScore, mood = item.displayMood)
+
+                            CoverArt(url = item.img, name = item.title, size = artSize, round = item.round)
+
+                            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                Text(
+                                    text = item.title,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = if (kind == "artist") 16.sp else 15.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = item.subtitle,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                // Proportional listening intensity bar
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(5.dp)
+                                        .clip(RoundedCornerShape(50))
+                                        .background(SolcoColors.Border.copy(alpha = 0.6f))
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth(ratio)
+                                            .height(5.dp)
+                                            .clip(RoundedCornerShape(50))
+                                            .background(
+                                                if (kind == "artist") SolcoColors.CyanVioletGradient
+                                                else SolcoColors.PrimaryGradient
+                                            )
+                                    )
+                                }
+                                item.extraBadge?.let {
+                                    Text(it, style = MaterialTheme.typography.labelSmall, color = SolcoColors.AccentMint)
+                                }
+                            }
+
+                            // Big, ultra-readable play count + optional score badge
+                            Column(
+                                horizontalAlignment = Alignment.End,
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text(
+                                    text = formatInt(item.plays),
+                                    fontSize = if (kind == "artist") 19.sp else 17.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = SolcoColors.AccentCyan
+                                )
+                                Text(
+                                    text = "ascolti",
+                                    fontSize = 10.sp,
+                                    color = SolcoColors.TextMuted,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                if (item.displayScore != null || item.displayMood != null) {
+                                    ScoreBadge(score = item.displayScore, mood = item.displayMood)
+                                }
                             }
                         }
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun ArtistPodiumHero(
+    first: LibraryRowItem,
+    second: LibraryRowItem,
+    third: LibraryRowItem,
+    onClick: (String) -> Unit
+) {
+    GlassCard(
+        glowBorder = true,
+        accentColor = SolcoColors.AccentGold,
+        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 14.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.Bottom,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            PodiumSlot(
+                modifier = Modifier.weight(1f),
+                item = second,
+                rank = 2,
+                avatarSize = 72.dp,
+                ringColor = Color(0xFFD0D9E6),
+                onClick = { onClick(second.id) }
+            )
+            PodiumSlot(
+                modifier = Modifier.weight(1.18f),
+                item = first,
+                rank = 1,
+                avatarSize = 94.dp,
+                ringColor = SolcoColors.AccentGold,
+                onClick = { onClick(first.id) }
+            )
+            PodiumSlot(
+                modifier = Modifier.weight(1f),
+                item = third,
+                rank = 3,
+                avatarSize = 68.dp,
+                ringColor = Color(0xFFE09F67),
+                onClick = { onClick(third.id) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun PodiumSlot(
+    modifier: Modifier,
+    item: LibraryRowItem,
+    rank: Int,
+    avatarSize: androidx.compose.ui.unit.Dp,
+    ringColor: Color,
+    onClick: () -> Unit
+) {
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 4.dp, horizontal = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(5.dp)
+    ) {
+        Box(contentAlignment = Alignment.BottomCenter) {
+            Box(
+                modifier = Modifier
+                    .padding(bottom = 8.dp)
+                    .border(2.5.dp, ringColor, CircleShape)
+                    .padding(3.dp)
+            ) {
+                CoverArt(url = item.img, name = item.title, size = avatarSize, round = true, glow = rank == 1)
+            }
+            Box(
+                modifier = Modifier
+                    .clip(CircleShape)
+                    .background(ringColor)
+                    .padding(horizontal = 8.dp, vertical = 2.dp)
+            ) {
+                Text("#$rank", color = Color(0xFF07070D), fontWeight = FontWeight.ExtraBold, fontSize = 11.sp)
+            }
+        }
+        Text(
+            text = item.title,
+            fontWeight = FontWeight.Bold,
+            fontSize = if (rank == 1) 14.sp else 12.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center
+        )
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(50))
+                .background(ringColor.copy(alpha = 0.16f))
+                .padding(horizontal = 9.dp, vertical = 3.dp)
+        ) {
+            Text(
+                text = "${formatInt(item.plays)} ascolti",
+                color = ringColor,
+                fontWeight = FontWeight.ExtraBold,
+                fontSize = if (rank == 1) 12.sp else 11.sp,
+                maxLines = 1
+            )
         }
     }
 }

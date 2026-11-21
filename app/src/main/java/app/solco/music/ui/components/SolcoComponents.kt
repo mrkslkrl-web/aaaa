@@ -63,6 +63,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
@@ -70,6 +71,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -84,6 +87,7 @@ import app.solco.music.domain.MonthlyBucket
 import app.solco.music.domain.RatingEngine
 import app.solco.music.ui.theme.SolcoColors
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import java.text.NumberFormat
 import java.time.Instant
 import java.time.LocalDate
@@ -138,8 +142,19 @@ fun formatRelativeSec(epochSec: Long): String {
     }
 }
 
+private val CardShape20 = RoundedCornerShape(18.dp)
+private val DefaultBorderBrush = Brush.linearGradient(
+    listOf(SolcoColors.Border.copy(alpha = 0.92f), SolcoColors.Border.copy(alpha = 0.42f))
+)
+private val CoverPalettes = listOf(
+    Brush.linearGradient(listOf(Color(0xFF7B61FF), Color(0xFF38D9F5))),
+    Brush.linearGradient(listOf(Color(0xFFFF5C8D), Color(0xFFFF9F43))),
+    Brush.linearGradient(listOf(Color(0xFF2EC4B6), Color(0xFF5B8CFF))),
+    Brush.linearGradient(listOf(Color(0xFFB565F7), Color(0xFFFF5C8D)))
+)
+
 /**
- * Ambient luminous multi-orb background that gives Solco depth and vibrant color without hurting legibility.
+ * Ambient luminous multi-orb background cached via drawWithCache for smooth 60/120fps scrolling.
  */
 @Composable
 fun AmbientBackdrop(
@@ -152,36 +167,29 @@ fun AmbientBackdrop(
         modifier = modifier
             .fillMaxSize()
             .background(SolcoColors.BgDeep)
-    ) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(primaryGlow.copy(alpha = 0.20f), Color.Transparent),
+            .drawWithCache {
+                val g1 = Brush.radialGradient(
+                    colors = listOf(primaryGlow.copy(alpha = 0.19f), Color.Transparent),
                     center = Offset(size.width * 0.15f, size.height * 0.06f),
                     radius = size.width * 0.85f
-                ),
-                radius = size.width * 0.85f,
-                center = Offset(size.width * 0.15f, size.height * 0.06f)
-            )
-            drawCircle(
-                brush = Brush.radialGradient(
+                )
+                val g2 = Brush.radialGradient(
                     colors = listOf(secondaryGlow.copy(alpha = 0.13f), Color.Transparent),
                     center = Offset(size.width * 0.90f, size.height * 0.25f),
                     radius = size.width * 0.70f
-                ),
-                radius = size.width * 0.70f,
-                center = Offset(size.width * 0.90f, size.height * 0.25f)
-            )
-            drawCircle(
-                brush = Brush.radialGradient(
+                )
+                val g3 = Brush.radialGradient(
                     colors = listOf(SolcoColors.AccentPink.copy(alpha = 0.09f), Color.Transparent),
                     center = Offset(size.width * 0.50f, size.height * 0.92f),
                     radius = size.width * 0.75f
-                ),
-                radius = size.width * 0.75f,
-                center = Offset(size.width * 0.50f, size.height * 0.92f)
-            )
-        }
+                )
+                onDrawBehind {
+                    drawRect(g1)
+                    drawRect(g2)
+                    drawRect(g3)
+                }
+            }
+    ) {
         content()
     }
 }
@@ -192,22 +200,23 @@ fun GlassCard(
     glowBorder: Boolean = false,
     accentColor: Color = SolcoColors.AccentViolet,
     onClick: (() -> Unit)? = null,
-    contentPadding: PaddingValues = PaddingValues(16.dp),
+    contentPadding: PaddingValues = PaddingValues(14.dp),
     content: @Composable ColumnScope.() -> Unit
 ) {
-    val shape = RoundedCornerShape(20.dp)
-    val borderBrush = if (glowBorder) {
-        Brush.linearGradient(listOf(accentColor.copy(alpha = 0.65f), SolcoColors.AccentCyan.copy(alpha = 0.35f)))
-    } else {
-        Brush.linearGradient(listOf(SolcoColors.Border.copy(alpha = 0.95f), SolcoColors.Border.copy(alpha = 0.45f)))
+    val borderBrush = remember(glowBorder, accentColor) {
+        if (glowBorder) {
+            Brush.linearGradient(listOf(accentColor.copy(alpha = 0.65f), SolcoColors.AccentCyan.copy(alpha = 0.35f)))
+        } else {
+            DefaultBorderBrush
+        }
     }
     Surface(
         modifier = modifier
-            .clip(shape)
+            .clip(CardShape20)
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
-            .border(BorderStroke(1.dp, borderBrush), shape),
-        shape = shape,
-        color = SolcoColors.CardBg.copy(alpha = 0.88f)
+            .border(BorderStroke(1.dp, borderBrush), CardShape20),
+        shape = CardShape20,
+        color = SolcoColors.CardBg.copy(alpha = 0.90f)
     ) {
         Column(modifier = Modifier.padding(contentPadding), content = content)
     }
@@ -222,26 +231,35 @@ fun CoverArt(
     glow: Boolean = false,
     modifier: Modifier = Modifier
 ) {
-    val shape: Shape = if (round) CircleShape else RoundedCornerShape((size.value * 0.22f).coerceIn(10f, 22f).dp)
-    val palette = listOf(
-        listOf(Color(0xFF7B61FF), Color(0xFF38D9F5)),
-        listOf(Color(0xFFFF5C8D), Color(0xFFFF9F43)),
-        listOf(Color(0xFF2EC4B6), Color(0xFF5B8CFF)),
-        listOf(Color(0xFFB565F7), Color(0xFFFF5C8D))
-    )
-    val grad = palette[abs(name.hashCode()) % palette.size]
-    val initials = name.trim().split(Regex("\\s+")).take(2).mapNotNull { it.firstOrNull()?.uppercaseChar() }.joinToString("")
+    val shape: Shape = remember(round, size) {
+        if (round) CircleShape else RoundedCornerShape((size.value * 0.22f).coerceIn(10f, 22f).dp)
+    }
+    val grad = CoverPalettes[abs(name.hashCode()) % CoverPalettes.size]
+    val initials = remember(name) {
+        name.trim().split(' ').filter { it.isNotEmpty() }.take(2)
+            .mapNotNull { it.firstOrNull()?.uppercaseChar() }.joinToString("")
+    }
+    val context = LocalContext.current
+    val px = with(LocalDensity.current) { size.roundToPx().coerceAtLeast(64) }
+    val request = remember(url, px) {
+        if (url.isNullOrBlank()) null
+        else ImageRequest.Builder(context)
+            .data(url)
+            .size(px, px)
+            .crossfade(true)
+            .build()
+    }
 
     Box(
         modifier = modifier
             .size(size)
             .then(
-                if (glow) Modifier.shadow(18.dp, shape, ambientColor = SolcoColors.AccentViolet, spotColor = SolcoColors.AccentPink)
+                if (glow) Modifier.shadow(14.dp, shape, ambientColor = SolcoColors.AccentViolet, spotColor = SolcoColors.AccentPink)
                 else Modifier
             )
             .clip(shape)
-            .background(Brush.linearGradient(grad))
-            .border(1.dp, Color.White.copy(alpha = 0.14f), shape),
+            .background(grad)
+            .border(1.dp, Color.White.copy(alpha = 0.16f), shape),
         contentAlignment = Alignment.Center
     ) {
         Text(
@@ -250,9 +268,9 @@ fun CoverArt(
             fontWeight = FontWeight.ExtraBold,
             fontSize = (size.value * 0.34f).coerceIn(12f, 34f).sp
         )
-        if (!url.isNullOrBlank()) {
+        if (request != null) {
             AsyncImage(
-                model = url,
+                model = request,
                 contentDescription = name,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()

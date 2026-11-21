@@ -21,13 +21,16 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.Logout
 import androidx.compose.material.icons.automirrored.rounded.Undo
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.AutoFixHigh
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
@@ -35,7 +38,6 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.EmojiEvents
 import androidx.compose.material.icons.rounded.Link
-import androidx.compose.material.icons.rounded.Logout
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
@@ -160,7 +162,11 @@ fun TopScreen(
             }
         }
 
+        val topListState = rememberLazyListState()
+        LaunchedEffect(kind, mode, maxTier) { topListState.scrollToItem(0) }
+
         LazyColumn(
+            state = topListState,
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 104.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -959,6 +965,43 @@ fun SettingsScreen(
             }
         }
 
+        // Catalog maintenance: refresh outdated artist profile images & fix '?' stub tracks
+        item {
+            GlassCard(glowBorder = true, accentColor = SolcoColors.AccentCyan) {
+                Text("Manutenzione catalogo", style = MaterialTheme.typography.titleLarge)
+                Text(
+                    "Aggiorna le foto profilo vecchie degli artisti e scarica i nomi mancanti di eventuali brani senza titolo.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Spacer(Modifier.height(10.dp))
+                Button(
+                    onClick = { vm.refreshArtistImagesNow() },
+                    enabled = !state.refreshingPhotos,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = SolcoColors.AccentCyan)
+                ) {
+                    if (state.refreshingPhotos) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color(0xFF07070D), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Aggiorno foto (${state.photoProgress})…", color = Color(0xFF07070D), fontWeight = FontWeight.Bold)
+                    } else {
+                        Icon(Icons.Rounded.AutoAwesome, contentDescription = null, tint = Color(0xFF07070D), modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Aggiorna tutte le foto profilo artisti", color = Color(0xFF07070D), fontWeight = FontWeight.ExtraBold)
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = { vm.resolveUnknownTracksNow() },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Rounded.AutoFixHigh, contentDescription = null, tint = SolcoColors.AccentViolet, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Ripara brani e artisti senza nome", color = SolcoColors.AccentViolet)
+                }
+            }
+        }
+
         // Account
         item {
             GlassCard {
@@ -969,7 +1012,7 @@ fun SettingsScreen(
                     onClick = { vm.signOut() },
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Icon(Icons.Rounded.Logout, contentDescription = null, tint = SolcoColors.AccentCoral, modifier = Modifier.size(18.dp))
+                    Icon(Icons.AutoMirrored.Rounded.Logout, contentDescription = null, tint = SolcoColors.AccentCoral, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
                     Text("Esci dall'account", color = SolcoColors.AccentCoral)
                 }

@@ -255,20 +255,40 @@ object ModelEngine {
             )
         }
 
+        // Index NameRecords by resolved tid so stub/nameless tracks never display "?" or "…"
+        val nameByTid = HashMap<String, NameRecord>()
+        for (nr in raw.names.values) {
+            val tid = nr.tid
+            if (!tid.isNullOrBlank() && nr.track.isNotBlank()) {
+                nameByTid.putIfAbsent(tid, nr)
+            }
+        }
+
         val tracksMap = LinkedHashMap<String, ResolvedTrack>()
         fun addTrack(t: TrackRecord) {
+            val fallbackName = nameByTid[t.id]
             val rawPairs = parseArtistsList(t.artistsJson).toMutableList()
             val hint = parseTrackHint(t.hintJson)
             if (rawPairs.isEmpty() && !hint?.an.isNullOrBlank()) {
                 rawPairs.add(null to hint!!.an!!)
             }
-            if (rawPairs.isEmpty()) rawPairs.add(null to "?")
-            val resolvedArtists = rawPairs.map(::resolveArtistPair).distinctBy { it.first }
+            if (rawPairs.isEmpty() && !fallbackName?.artist.isNullOrBlank()) {
+                rawPairs.add(null to fallbackName!!.artist)
+            }
+            val resolvedArtists = rawPairs
+                .filter { it.first != null || (it.second.isNotBlank() && it.second != "?" && it.second != "…") }
+                .map(::resolveArtistPair)
+                .distinctBy { it.first }
+            val bestTitle = when {
+                t.name.isNotBlank() && t.name != "?" && t.name != "…" -> t.name
+                !fallbackName?.track.isNullOrBlank() -> fallbackName!!.track
+                else -> t.name.ifBlank { "Brano sconosciuto" }
+            }
             tracksMap[t.id] = ResolvedTrack(
                 id = t.id,
-                name = t.name.ifBlank { "?" },
+                name = bestTitle,
                 albumId = t.album?.takeIf { it.isNotBlank() },
-                albumHint = hint?.al,
+                albumHint = hint?.al ?: fallbackName?.album?.takeIf { it.isNotBlank() },
                 dur = t.dur,
                 isrc = t.isrc?.takeIf { it.isNotBlank() },
                 artists = resolvedArtists,
@@ -737,6 +757,8 @@ object ModelEngine {
             val countedForSong = HashSet<String>()
             for ((aid, _) in song.artists) {
                 val canonAid = model.artistCanon[aid] ?: aid
+                val artName = model.artists[canonAid]?.name?.trim().orEmpty()
+                if (canonAid == "n:" || artName.isEmpty() || artName == "?" || artName == "…") continue
                 if (!countedForSong.add(canonAid)) continue
                 val acc = artistAcc.getOrPut(canonAid) { MutableArtistStat(first = st.firstTs, last = st.lastTs) }
                 acc.n += st.plays
@@ -757,6 +779,32 @@ object ModelEngine {
             totalPlays = total,
             totalMs = totalMs
         )
+    }
+
+    fun monthlyTotalActivity(
+        model: SolcoModel,
+        months: Int = 12
+    ): List<MonthlyBucket> {
+        val now = LocalDate.now()
+        val keys = (months - 1 downTo 0).map { offset ->
+            val d = now.minusMonths(offset.toLong())
+            d.year to d.monthValue
+        }
+        val counts = keys.associateWith { 0 }.toMutableMap()
+        val startEpoch = now.minusMonths((months - 1).toLong()).withDayOfMonth(1)
+            .atStartOfDay(ZoneId.systemDefault()).toEpochSecond()
+        val zone = ZoneId.systemDefault()
+
+        for (i in model.plays.lastIndex downTo 0) {
+            val p = model.plays[i]
+            if (p.ts < startEpoch) break
+            val d = Instant.ofEpochSecond(p.ts).atZone(zone)
+            val k = d.year to d.monthValue
+            if (k in counts) counts[k] = (counts[k] ?: 0) + 1
+        }
+        return keys.map { (y, m) ->
+            MonthlyBucket(y, m, monthShorts[(m - 1).coerceIn(0, 11)], counts[y to m] ?: 0)
+        }
     }
 
     fun monthlyActivity(

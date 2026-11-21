@@ -80,6 +80,8 @@ data class SolcoUiSnapshot(
     val syncing: Boolean = false,
     val matching: Boolean = false,
     val matchProgress: String = "",
+    val refreshingPhotos: Boolean = false,
+    val photoProgress: String = "",
     val lastSyncMs: Long = 0L,
     val error: String? = null,
     val model: SolcoModel = SolcoModel(),
@@ -292,6 +294,7 @@ class SolcoRepository(
         }
         if (runMatcher) {
             runSmartMatcher(maxItems = 80)
+            refreshArtistImages(force = false)
         }
     }
 
@@ -830,6 +833,197 @@ class SolcoRepository(
             if (matchedCount > 0) rebuildModel()
         } finally {
             _state.update { it.copy(matching = false, matchProgress = "") }
+        }
+        resolveStubTracksAndArtists()
+    }
+
+    /**
+     * Resolves stub / "?" / "…" tracks & artists in fast batches so no "?" entries remain in the library.
+     */
+    suspend fun resolveStubTracksAndArtists() = withContext(Dispatchers.IO) {
+        val model = _state.value.model
+        val stubTrackIds = model.tracks.values
+            .filter {
+                it.st == "stub" || it.name == "?" || it.name == "…" || it.name == "Brano sconosciuto" ||
+                    it.artists.isEmpty() || it.artists.any { a -> a.second == "?" || a.second == "…" }
+            }
+            .map { it.id }
+            .distinct()
+
+        if (stubTrackIds.isEmpty()) return@withContext
+
+        val spCfg = _state.value.spotifyConfig
+        val hasSpotify = spCfg.id.isNotBlank() && spCfg.secret.isNotBlank()
+        var resolvedAny = false
+
+        val spIds = stubTrackIds.filter { TextNormalizer.isSpotifyId(it) }.take(200)
+        if (hasSpotify && spIds.isNotEmpty()) {
+            val fetched = runCatching { musicApi.getSpotifyTracksBatch(spCfg, spIds) }.getOrDefault(emptyList())
+            for (m in fetched) {
+                persistMatchedTrackLightweight(m)
+                resolvedAny = true
+            }
+        }
+
+        val dzIds = stubTrackIds.filter { it.startsWith("dz:") }.take(60)
+        for (dzId in dzIds) {
+            val m = runCatching { musicApi.getDeezerTrack(dzId) }.getOrNull() ?: continue
+            persistMatchedTrackLightweight(m)
+            resolvedAny = true
+        }
+
+        if (resolvedAny) rebuildModel()
+    }
+
+    private suspend fun persistMatchedTrackLightweight(m: MatchedTrackResult) {
+        val now = System.currentTimeMillis()
+        val artistsJson = encodePairs(m.trackArtists)
+        val te = TrackEntity(
+            id = m.trackId, name = m.title, album = m.albumId, dur = m.durMs, isrc = m.isrc,
+            artistsJson = artistsJson, hintJson = null, st = "ok", disc = m.disc, num = m.trackNum, tries = 0, u = now
+        )
+        tracksMap[m.trackId] = te.toRecord()
+        dao.upsertTracks(listOf(te))
+        writeAndSync(
+            "tracks", m.trackId,
+            mapOf(
+                "id" to m.trackId, "name" to m.title, "album" to m.albumId, "dur" to m.durMs,
+                "isrc" to m.isrc, "artists" to artistsJson, "hint" to null, "st" to "ok",
+                "disc" to m.disc, "num" to m.trackNum, "tries" to 0
+            )
+        )
+        for ((aid, aname) in (m.trackArtists + m.albumArtists).distinctBy { it.first }) {
+            val cur = artistsMap[aid]
+            if (cur == null || cur.name == "…" || cur.name == "?") {
+                val ae = ArtistEntity(aid, aname, cur?.img, cur?.st ?: "stub", 0, now)
+                artistsMap[aid] = ae.toRecord()
+                dao.upsertArtists(listOf(ae))
+                writeAndSync("artists", aid, mapOf("id" to aid, "name" to aname, "img" to cur?.img, "st" to ae.st, "tries" to 0))
+            }
+        }
+        val alId = m.albumId
+        if (!alId.isNullOrBlank() && !albumsMap.containsKey(alId)) {
+            val alArtJson = encodePairs(m.albumArtists)
+            val alTracksJson = buildJsonArray { add(JsonPrimitive(m.trackId)) }.toString()
+            val ae = AlbumEntity(alId, m.albumName ?: m.title, m.albumType, m.albumTotal, m.albumDate, m.albumImg, alArtJson, alTracksJson, "part", 0, now)
+            albumsMap[alId] = ae.toRecord()
+            dao.upsertAlbums(listOf(ae))
+            writeAndSync(
+                "albums", alId,
+                mapOf(
+                    "id" to alId, "name" to ae.name, "type" to ae.type, "total" to ae.total,
+                    "date" to ae.date, "img" to ae.img, "artists" to alArtJson, "tracks" to alTracksJson,
+                    "st" to "part", "tries" to 0
+                )
+            )
+        }
+    }
+
+    /**
+     * Refreshes artist profile photos across the entire library using Spotify batch API (50/call)
+     * and Deezer high-res profile pictures so outdated/missing artist avatars stay fresh!
+     */
+    suspend fun refreshArtistImages(force: Boolean = false) = withContext(Dispatchers.IO) {
+        if (_state.value.refreshingPhotos) return@withContext
+        val lastRefresh = dao.getMeta("artists_photo_refresh_ms")?.toLongOrNull() ?: 0L
+        val sevenDaysMs = 7L * 24L * 3600L * 1000L
+        if (!force && System.currentTimeMillis() - lastRefresh < sevenDaysMs) return@withContext
+
+        val model = _state.value.model
+        val stats = _state.value.statsAll
+        val orderedArtists = stats.artist.entries
+            .sortedByDescending { it.value.plays }
+            .mapNotNull { model.artists[it.key] }
+            .filter { it.name.isNotBlank() && it.name != "?" && it.name != "…" }
+
+        if (orderedArtists.isEmpty()) return@withContext
+
+        _state.update { it.copy(refreshingPhotos = true, photoProgress = "0/${orderedArtists.size}") }
+        val spCfg = _state.value.spotifyConfig
+        val hasSpotify = spCfg.id.isNotBlank() && spCfg.secret.isNotBlank()
+        val now = System.currentTimeMillis()
+        var updatedCount = 0
+
+        try {
+            // 1. Ultra-fast Spotify batch refresh (50 artists per HTTP request!)
+            val updatedIds = HashSet<String>()
+            if (hasSpotify) {
+                val spArtistMap = LinkedHashMap<String, String>() // spId -> canonId
+                for (a in orderedArtists) {
+                    val spId = when {
+                        TextNormalizer.isSpotifyId(a.id) -> a.id
+                        else -> a.aliases.firstOrNull { TextNormalizer.isSpotifyId(it) }
+                    }
+                    if (spId != null) spArtistMap[spId] = a.id
+                }
+                val spIdsList = spArtistMap.keys.toList()
+                var done = 0
+                for (chunk in spIdsList.chunked(50)) {
+                    val batch = runCatching { musicApi.getSpotifyArtistsBatch(spCfg, chunk) }.getOrDefault(emptyMap())
+                    val ents = mutableListOf<ArtistEntity>()
+                    for ((spId, pair) in batch) {
+                        val canonId = spArtistMap[spId] ?: continue
+                        val (freshName, freshImg) = pair
+                        if (freshImg.isNullOrBlank()) continue
+                        val prev = artistsMap[canonId]
+                        if (prev?.img != freshImg || prev.name == "…" || prev.name == "?") {
+                            val ae = ArtistEntity(canonId, freshName.ifBlank { prev?.name ?: "…" }, freshImg, "ok", 0, now)
+                            artistsMap[canonId] = ae.toRecord()
+                            ents.add(ae)
+                            updatedCount++
+                        }
+                        updatedIds.add(canonId)
+                    }
+                    if (ents.isNotEmpty()) {
+                        dao.upsertArtists(ents)
+                        runCatching {
+                            firebase.batchSetDocuments("artists", ents.map { ae ->
+                                ae.id to mapOf("id" to ae.id, "name" to ae.name, "img" to ae.img, "st" to "ok", "tries" to 0)
+                            })
+                        }
+                    }
+                    done += chunk.size
+                    _state.update { it.copy(photoProgress = "$done/${orderedArtists.size}") }
+                }
+                if (updatedCount > 0) rebuildModel()
+            }
+
+            // 2. Refresh remaining artists (without Spotify ID or when Spotify creds absent) via Deezer picture_xl
+            val remaining = orderedArtists.filter { it.id !in updatedIds && (force || it.img.isNullOrBlank()) }.take(150)
+            val dzBatchEnts = mutableListOf<ArtistEntity>()
+            remaining.forEachIndexed { idx, art ->
+                _state.update { it.copy(photoProgress = "${updatedIds.size + idx + 1}/${orderedArtists.size}") }
+                val profile = runCatching { musicApi.findDeezerArtistProfile(art.name) }.getOrNull()
+                val pic = profile?.second
+                if (!pic.isNullOrBlank() && pic != art.img) {
+                    val ae = ArtistEntity(art.id, art.name, pic, "ok", 0, now)
+                    artistsMap[art.id] = ae.toRecord()
+                    dzBatchEnts.add(ae)
+                    updatedCount++
+                    if (dzBatchEnts.size >= 15) {
+                        dao.upsertArtists(dzBatchEnts.toList())
+                        runCatching {
+                            firebase.batchSetDocuments("artists", dzBatchEnts.map { e ->
+                                e.id to mapOf("id" to e.id, "name" to e.name, "img" to e.img, "st" to "ok", "tries" to 0)
+                            })
+                        }
+                        dzBatchEnts.clear()
+                        rebuildModel()
+                    }
+                }
+            }
+            if (dzBatchEnts.isNotEmpty()) {
+                dao.upsertArtists(dzBatchEnts.toList())
+                runCatching {
+                    firebase.batchSetDocuments("artists", dzBatchEnts.map { e ->
+                        e.id to mapOf("id" to e.id, "name" to e.name, "img" to e.img, "st" to "ok", "tries" to 0)
+                    })
+                }
+                rebuildModel()
+            }
+            dao.putMeta(SyncMetaEntity("artists_photo_refresh_ms", now.toString()))
+        } finally {
+            _state.update { it.copy(refreshingPhotos = false, photoProgress = "") }
         }
     }
 

@@ -20,14 +20,15 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Bookmark
 import androidx.compose.material.icons.rounded.BookmarkBorder
-import androidx.compose.material.icons.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.RateReview
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Visibility
@@ -100,6 +101,10 @@ fun ReviewsScreen(
     var tab by remember(initialTab) { mutableStateOf(initialTab.ifBlank { "album" }) }
     var sortBy by remember { mutableStateOf("rating") }
     val showCalc = state.showCalculatedAlbumScore
+    val listState = rememberLazyListState()
+    LaunchedEffect(tab, sortBy) {
+        listState.scrollToItem(0)
+    }
 
     val activeAll = remember(state.reviews) { state.reviews.values.filter { it.del == 0 } }
     val counts = remember(activeAll) {
@@ -301,6 +306,7 @@ fun ReviewsScreen(
             )
         } else {
             LazyColumn(
+                state = listState,
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 104.dp),
                 verticalArrangement = Arrangement.spacedBy(9.dp)
@@ -478,7 +484,10 @@ fun ReleasesScreen(
                 onAction = { vm.scanReleases(force = true) }
             )
         } else {
+            val relListState = rememberLazyListState()
+            LaunchedEffect(tab) { relListState.scrollToItem(0) }
             LazyColumn(
+                state = relListState,
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 104.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -578,7 +587,7 @@ private fun ReleaseRowCard(
                 }
                 if (!item.link.isNullOrBlank()) {
                     IconButton(onClick = onOpenExternal, modifier = Modifier.size(34.dp)) {
-                        Icon(Icons.Rounded.OpenInNew, contentDescription = "Apri esterno", tint = SolcoColors.TextSecondary, modifier = Modifier.size(18.dp))
+                        Icon(Icons.AutoMirrored.Rounded.OpenInNew, contentDescription = "Apri esterno", tint = SolcoColors.TextSecondary, modifier = Modifier.size(18.dp))
                     }
                 }
             }
