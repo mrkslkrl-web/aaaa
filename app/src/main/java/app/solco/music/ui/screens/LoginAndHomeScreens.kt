@@ -413,9 +413,17 @@ fun HomeScreen(
             }
         }
 
-        // Hero Stats Banner + Goals in one dense, rich dashboard block
+        // Hero Stats Banner with exact start date of listening history!
         item {
             val st = state.statsAll
+            val firstPlayDate = remember(state.model.firstPlay) {
+                if (state.model.firstPlay > 0L) {
+                    java.time.Instant.ofEpochSecond(state.model.firstPlay)
+                        .atZone(java.time.ZoneId.systemDefault())
+                        .toLocalDate()
+                        .format(java.time.format.DateTimeFormatter.ofPattern("d MMM yyyy", java.util.Locale.ITALY))
+                } else null
+            }
             GlassCard(
                 glowBorder = true,
                 accentColor = SolcoColors.AccentViolet,
@@ -443,6 +451,31 @@ fun HomeScreen(
                             Text(formatInt(activeReviews.size), fontWeight = FontWeight.ExtraBold, fontSize = 16.sp, color = SolcoColors.AccentMint)
                             Text("recensioni", style = MaterialTheme.typography.labelSmall)
                         }
+                    }
+                }
+                if (firstPlayDate != null) {
+                    Spacer(Modifier.height(10.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(SolcoColors.AccentViolet.copy(alpha = 0.14f))
+                            .border(1.dp, SolcoColors.AccentViolet.copy(alpha = 0.35f), RoundedCornerShape(10.dp))
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Conteggio dal $firstPlayDate",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = SolcoColors.AccentCyan
+                        )
+                        Text(
+                            text = "${formatInt(st.album.size)} album · ${formatInt(st.song.size)} brani",
+                            fontSize = 11.sp,
+                            color = SolcoColors.TextSecondary
+                        )
                     }
                 }
             }

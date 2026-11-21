@@ -33,6 +33,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -46,7 +47,11 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.delay
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -93,25 +98,49 @@ class MainActivity : ComponentActivity() {
 private data class NavTab(
     val route: String,
     val label: String,
-    val icon: ImageVector
+    val icon: ImageVector,
+    val accent: Color
 )
 
 private val bottomTabs = listOf(
-    NavTab("home", "Home", Icons.Rounded.Home),
-    NavTab("artists", "Artisti", Icons.Rounded.Person),
-    NavTab("albums", "Album", Icons.Rounded.Album),
-    NavTab("singles", "Singoli", Icons.Rounded.MusicNote),
-    NavTab("more", "Altro", Icons.Rounded.GridView)
+    NavTab("home", "Home", Icons.Rounded.Home, SolcoColors.AccentViolet),
+    NavTab("artists", "Artisti", Icons.Rounded.Person, SolcoColors.AccentCyan),
+    NavTab("albums", "Album", Icons.Rounded.Album, SolcoColors.AccentPink),
+    NavTab("singles", "Singoli", Icons.Rounded.MusicNote, SolcoColors.AccentMint),
+    NavTab("more", "Altro", Icons.Rounded.GridView, SolcoColors.AccentGold)
 )
 
 @Composable
 private fun SolcoRoot(vm: SolcoViewModel = viewModel()) {
     val state by vm.state.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
+    val lifecycleOwner = LocalLifecycleOwner.current
 
     LaunchedEffect(Unit) {
         vm.toast.collect { msg ->
             snackbarHostState.showSnackbar(msg)
+        }
+    }
+
+    // Automatically refresh Recent Plays & Now Playing whenever app returns to foreground
+    DisposableEffect(lifecycleOwner, state.phase) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME && state.phase == "ready") {
+                if (System.currentTimeMillis() - state.lastSyncMs > 20_000L) {
+                    vm.syncRecentAuto()
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    // Lightweight automatic background poll every 45s while app is open
+    LaunchedEffect(state.phase) {
+        if (state.phase != "ready") return@LaunchedEffect
+        while (true) {
+            delay(45_000L)
+            vm.syncRecentAuto()
         }
     }
 
@@ -267,7 +296,11 @@ private fun FloatingGlassBottomBar(
                     modifier = Modifier
                         .clip(RoundedCornerShape(18.dp))
                         .background(
-                            if (selected) SolcoColors.AccentViolet.copy(alpha = 0.22f) else Color.Transparent
+                            if (selected) tab.accent.copy(alpha = 0.22f) else Color.Transparent
+                        )
+                        .then(
+                            if (selected) Modifier.border(1.dp, tab.accent.copy(alpha = 0.55f), RoundedCornerShape(18.dp))
+                            else Modifier
                         )
                         .clickable { onSelect(tab.route) }
                         .padding(horizontal = 12.dp, vertical = 6.dp),
@@ -278,7 +311,7 @@ private fun FloatingGlassBottomBar(
                             Icon(
                                 tab.icon,
                                 contentDescription = tab.label,
-                                tint = if (selected) SolcoColors.AccentViolet else SolcoColors.TextMuted,
+                                tint = if (selected) tab.accent else SolcoColors.TextMuted,
                                 modifier = Modifier.size(22.dp)
                             )
                             if (tab.route == "more" && unresolvedCount > 0) {
@@ -295,7 +328,7 @@ private fun FloatingGlassBottomBar(
                             text = tab.label,
                             fontSize = 10.sp,
                             fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                            color = if (selected) SolcoColors.TextPrimary else SolcoColors.TextMuted
+                            color = if (selected) tab.accent else SolcoColors.TextMuted
                         )
                     }
                 }

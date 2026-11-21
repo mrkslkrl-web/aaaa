@@ -417,6 +417,20 @@ class MusicApiClients(
         return out
     }
 
+    /**
+     * Fetches the live official Spotify artist profile photo via Spotify's public oEmbed endpoint.
+     * Works with zero API key and is unaffected by Spotify Web API Development Mode restrictions.
+     */
+    suspend fun getSpotifyArtistOEmbedImage(artistId: String): Pair<String, String?>? {
+        if (!TextNormalizer.isSpotifyId(artistId)) return null
+        val url = "https://open.spotify.com/oembed?url=${enc("https://open.spotify.com/artist/$artistId")}"
+        val text = getText(url) ?: return null
+        val obj = runCatching { json.parseToJsonElement(text).jsonObject }.getOrNull() ?: return null
+        val title = obj["title"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        val thumb = obj["thumbnail_url"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+        return if (thumb != null) title to thumb else null
+    }
+
     private fun parseSpotifyTrackObj(obj: JsonObject): MatchedTrackResult? {
         val tid = obj["id"]?.jsonPrimitive?.contentOrNull ?: return null
         val title = obj["name"]?.jsonPrimitive?.contentOrNull ?: return null
@@ -587,21 +601,31 @@ class MusicApiClients(
         findDeezerArtistProfile(artistName)?.first
 
     /**
-     * Returns Pair(dzNumericId, highResPictureUrl) for the best matching Deezer artist.
+     * Returns Pair(dzNumericId, highResPictureUrl) for the most popular matching Deezer artist,
+     * rejecting empty placeholder URLs (`/artist//`).
      */
     suspend fun findDeezerArtistProfile(artistName: String): Pair<String, String?>? {
         val target = TextNormalizer.norm(artistName)
         if (target.isEmpty()) return null
-        val root = deezerGet("/search/artist?limit=8&q=${enc(artistName)}") ?: return null
+        val root = deezerGet("/search/artist?limit=10&q=${enc(artistName)}") ?: return null
         val data = root["data"]?.jsonArray ?: return null
-        val hit = data.mapNotNull { it as? JsonObject }.firstOrNull {
+        val candidates = data.mapNotNull { it as? JsonObject }
+        val exact = candidates.filter {
             TextNormalizer.norm(it["name"]?.jsonPrimitive?.contentOrNull) == target
-        } ?: return null
+        }
+        val pool = exact.ifEmpty {
+            candidates.filter {
+                val n = TextNormalizer.norm(it["name"]?.jsonPrimitive?.contentOrNull)
+                n.isNotEmpty() && n.replace(" ", "") == target.replace(" ", "")
+            }
+        }
+        val hit = pool.maxByOrNull { it["nb_fan"]?.jsonPrimitive?.longOrNull ?: 0L } ?: return null
         val id = hit["id"]?.jsonPrimitive?.longOrNull ?: return null
-        val pic = hit["picture_xl"]?.jsonPrimitive?.contentOrNull
+        val rawPic = hit["picture_xl"]?.jsonPrimitive?.contentOrNull
             ?: hit["picture_big"]?.jsonPrimitive?.contentOrNull
             ?: hit["picture_medium"]?.jsonPrimitive?.contentOrNull
-        return id.toString() to pic?.takeIf { it.isNotBlank() }
+        val validPic = rawPic?.takeIf { it.isNotBlank() && !it.contains("/artist//") }
+        return id.toString() to validPic
     }
 
     suspend fun getDeezerTrack(dzTrackId: String): MatchedTrackResult? {

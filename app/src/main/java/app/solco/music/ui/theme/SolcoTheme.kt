@@ -11,24 +11,25 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
 object SolcoColors {
-    val BgDeep = Color(0xFF07070D)
-    val BgSurface = Color(0xFF10101A)
-    val CardBg = Color(0xFF151523)
-    val CardElevated = Color(0xFF1C1C2E)
-    val Border = Color(0xFF28283E)
-    val BorderGlow = Color(0x449D7BFF)
+    // Deep OLED true-dark surfaces so vibrant neon details pop cleanly
+    val BgDeep = Color(0xFF05050A)
+    val BgSurface = Color(0xFF0C0C14)
+    val CardBg = Color(0xFF11111C)
+    val CardElevated = Color(0xFF181828)
+    val Border = Color(0xFF25253A)
+    val BorderGlow = Color(0x669D7BFF)
 
-    val TextPrimary = Color(0xFFF6F6FB)
-    val TextSecondary = Color(0xFFA9A9C2)
-    val TextMuted = Color(0xFF6E6E8A)
+    val TextPrimary = Color(0xFFF7F7FC)
+    val TextSecondary = Color(0xFFA9A9C4)
+    val TextMuted = Color(0xFF6B6B88)
 
-    val AccentViolet = Color(0xFF9D7BFF)
-    val AccentCyan = Color(0xFF38D9F5)
-    val AccentPink = Color(0xFFFF5C8D)
-    val AccentMint = Color(0xFF2EC4B6)
-    val AccentAmber = Color(0xFFFFC15E)
-    val AccentCoral = Color(0xFFFF5C77)
-    val AccentGold = Color(0xFFF7CE5B)
+    val AccentViolet = Color(0xFFA27BFF)
+    val AccentCyan = Color(0xFF33E0FF)
+    val AccentPink = Color(0xFFFF5590)
+    val AccentMint = Color(0xFF28E0B9)
+    val AccentAmber = Color(0xFFFFBE4F)
+    val AccentCoral = Color(0xFFFF526F)
+    val AccentGold = Color(0xFFFFD452)
 
     val PrimaryGradient = Brush.linearGradient(
         colors = listOf(AccentViolet, AccentPink)
@@ -45,9 +46,9 @@ object SolcoColors {
 
 private val SolcoDarkScheme = darkColorScheme(
     primary = SolcoColors.AccentViolet,
-    onPrimary = Color(0xFF0A0814),
+    onPrimary = Color(0xFF06050D),
     secondary = SolcoColors.AccentCyan,
-    onSecondary = Color(0xFF061318),
+    onSecondary = Color(0xFF041016),
     tertiary = SolcoColors.AccentPink,
     onTertiary = Color.White,
     background = SolcoColors.BgDeep,

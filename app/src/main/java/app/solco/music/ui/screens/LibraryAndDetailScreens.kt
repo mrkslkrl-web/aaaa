@@ -106,18 +106,33 @@ fun LibraryScreen(
 ) {
     var period by remember(kind) { mutableStateOf("all") }
     var sortBy by remember(kind) { mutableStateOf("plays") }
+    var albumFilter by remember(kind) { mutableStateOf("all") } // "all", "no_album", "in_album"
     var query by remember(kind) { mutableStateOf("") }
     val listState = rememberLazyListState()
 
-    // ALWAYS scroll back to #1 when switching tab, period, sort, or search query!
-    LaunchedEffect(kind, period, sortBy, query) {
+    // ALWAYS scroll back to #1 when switching tab, period, sort, album filter, or search query!
+    LaunchedEffect(kind, period, sortBy, albumFilter, query) {
         listState.scrollToItem(0)
     }
 
     val stats = remember(state.model, period) { vm.statsForPeriod(period) }
     val showCalc = state.showCalculatedAlbumScore
 
-    val rows = remember(state.model, stats, state.reviews, kind, sortBy, query, showCalc) {
+    val trackFilterCounts = remember(state.model, stats, kind) {
+        if (kind != "track") Triple(0, 0, 0)
+        else {
+            var all = 0; var noAl = 0; var inAl = 0
+            for (sid in stats.song.keys) {
+                val s = state.model.songs[sid] ?: continue
+                if (s.title == "?" || s.title == "…") continue
+                all++
+                if (s.inAlbum) inAl++ else noAl++
+            }
+            Triple(all, noAl, inAl)
+        }
+    }
+
+    val rows = remember(state.model, stats, state.reviews, kind, sortBy, albumFilter, query, showCalc) {
         val qNorm = TextNormalizer.norm(query)
         val model = state.model
 
@@ -172,6 +187,8 @@ fun LibraryScreen(
             else -> stats.song.entries.mapNotNull { (sid, st) ->
                 val s = model.songs[sid] ?: return@mapNotNull null
                 if (s.title == "?" || s.title == "…") return@mapNotNull null
+                if (albumFilter == "no_album" && s.inAlbum) return@mapNotNull null
+                if (albumFilter == "in_album" && !s.inAlbum) return@mapNotNull null
                 val artistLabel = s.artists.joinToString(", ") { it.second }
                 if (qNorm.isNotEmpty() &&
                     !TextNormalizer.norm(s.title).contains(qNorm) &&
@@ -179,6 +196,8 @@ fun LibraryScreen(
                 ) return@mapNotNull null
                 val rev = findReview("track", sid)
                 val (ds, dm) = rev?.let { RatingEngine.displayScore(it, showCalc) } ?: (null to null)
+                val tag = if (s.inAlbum) "In album" else "Fuori album"
+                val durPart = if (s.dur > 0) " · ${formatTrackMs(s.dur)}" else ""
                 LibraryRowItem(
                     id = sid,
                     title = s.title,
@@ -186,7 +205,7 @@ fun LibraryScreen(
                     img = s.img,
                     round = false,
                     plays = st.plays,
-                    extraBadge = if (s.dur > 0) formatTrackMs(s.dur) else null,
+                    extraBadge = "$tag$durPart",
                     lastTs = st.lastTs,
                     sortScore = rev?.let { RatingEngine.sortScore(it) } ?: -1.0,
                     displayScore = ds,
@@ -302,6 +321,42 @@ fun LibraryScreen(
                         selectedLabelColor = SolcoColors.TextPrimary
                     )
                 )
+            }
+        }
+
+        if (kind == "track") {
+            val (cAll, cNoAl, cInAl) = trackFilterCounts
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp, vertical = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                listOf(
+                    Triple("all", "Tutti (${formatInt(cAll)})", SolcoColors.AccentViolet),
+                    Triple("no_album", "Fuori album (${formatInt(cNoAl)})", SolcoColors.AccentMint),
+                    Triple("in_album", "In album (${formatInt(cInAl)})", SolcoColors.AccentCyan)
+                ).forEach { (k, lbl, accent) ->
+                    val sel = albumFilter == k
+                    FilterChip(
+                        selected = sel,
+                        onClick = { albumFilter = k },
+                        label = { Text(lbl, fontSize = 12.sp, fontWeight = if (sel) FontWeight.Bold else FontWeight.Medium) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = accent.copy(alpha = 0.24f),
+                            selectedLabelColor = SolcoColors.TextPrimary,
+                            containerColor = SolcoColors.CardBg,
+                            labelColor = SolcoColors.TextSecondary
+                        ),
+                        border = FilterChipDefaults.filterChipBorder(
+                            enabled = true,
+                            selected = sel,
+                            borderColor = SolcoColors.Border,
+                            selectedBorderColor = accent
+                        )
+                    )
+                }
             }
         }
 

@@ -83,11 +83,23 @@ class SolcoViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun syncRecentAuto() {
+        viewModelScope.launch {
+            repo.syncLastFmQuick()
+        }
+    }
+
     fun refreshArtistImagesNow() {
         viewModelScope.launch {
-            showToast("Aggiorno le foto profilo degli artisti…")
-            repo.refreshArtistImages(force = true)
-            showToast("Foto profilo artisti aggiornate!")
+            showToast("Aggiorno foto profilo artisti (Spotify + Deezer)…")
+            val (updated, checked) = repo.refreshArtistImages(force = true)
+            if (updated > 0) {
+                showToast("Aggiornate $updated foto profilo su $checked artisti!")
+            } else if (checked > 0) {
+                showToast("Controllati $checked artisti: foto già aggiornate!")
+            } else {
+                showToast("Nessun artista da aggiornare")
+            }
         }
     }
 
